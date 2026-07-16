@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+models/*.pt
+screenshots/*.jpg
+screenshots/*.jpeg
+screenshots/*.png
+data/*.db
+data/*.db-shm
+data/*.db-wal
+Videos/
