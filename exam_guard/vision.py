@@ -537,6 +537,8 @@ class ExamVisionPipeline:
                 details += f"  {student.yaw:+.0f} deg"
             if student.gaze_direction in {"Left", "Right"}:
                 details += f"  EYES {student.gaze_direction.upper()}"
+            if student.body_direction in {"Left", "Right"}:
+                details += f"  BODY {student.body_direction.upper()}"
             if student.movement_count:
                 details += (
                     f"  HEAD CHANGE {student.movement_count}/"

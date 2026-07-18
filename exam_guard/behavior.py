@@ -36,6 +36,19 @@ class _TrackState:
     smoothed_gaze: Optional[float] = None
     gaze_direction: str = "Center"
     gaze_started: Optional[float] = None
+    body_calibration_started: Optional[float] = None
+    body_calibration_centers: deque[float] = field(
+        default_factory=lambda: deque(maxlen=240)
+    )
+    body_calibration_widths: deque[float] = field(
+        default_factory=lambda: deque(maxlen=240)
+    )
+    baseline_body_center_x: Optional[float] = None
+    baseline_body_width: Optional[float] = None
+    body_shift_history: deque[float] = field(default_factory=lambda: deque(maxlen=3))
+    smoothed_body_shift: float = 0.0
+    body_direction: str = "Center"
+    body_started: Optional[float] = None
     active_alerts: set[str] = field(default_factory=set)
     last_incident: float = float("-inf")
     suspicious_until: float = float("-inf")
@@ -59,6 +72,9 @@ class BehaviorAnalyzer:
         if observation.head_pose is not None:
             state.last_pose_available = now
 
+        body_direction, body_seconds, body_shift = self._update_body_state(
+            state, observation, now
+        )
         direction, movement_count, pose_ready = self._update_pose_state(
             state, observation, now
         )
@@ -70,6 +86,11 @@ class BehaviorAnalyzer:
             direction,
             movement_count,
             pose_ready,
+            look_seconds,
+            gaze_seconds,
+            body_direction,
+            body_seconds,
+            body_shift,
             now,
         )
         attention_progress = min(
@@ -108,7 +129,7 @@ class BehaviorAnalyzer:
         elif state.risk_score >= self.config.risk_warning_score:
             status = "Warning"
             reasons = [
-                f"{risk_reason or 'Head/eye evidence'} building "
+                f"{risk_reason or 'Head/eye/body evidence'} building "
                 f"({state.risk_score:.1f}/{self.config.risk_alert_score:.1f})"
             ]
         else:
@@ -125,6 +146,7 @@ class BehaviorAnalyzer:
             priority = {
                 "head_eye_risk": 4,
                 "side_gaze": 3,
+                "body_movement": 2,
                 "sustained_head_turn": 2,
                 "repeated_head_movement": 1,
             }
@@ -154,6 +176,9 @@ class BehaviorAnalyzer:
             gaze_direction=state.gaze_direction,
             gaze_seconds=gaze_seconds,
             gaze_horizontal=state.smoothed_gaze,
+            body_direction=body_direction,
+            body_seconds=body_seconds,
+            body_shift=body_shift,
             movement_count=movement_count,
             movement_label=state.movement_label,
             reason="; ".join(reasons),
@@ -169,6 +194,11 @@ class BehaviorAnalyzer:
         direction: str,
         movement_count: int,
         pose_ready: bool,
+        look_seconds: float,
+        gaze_seconds: float,
+        body_direction: str,
+        body_seconds: float,
+        body_shift: float,
         now: float,
     ) -> tuple[str, str, bool]:
         previous_update = state.risk_updated_at
@@ -184,6 +214,7 @@ class BehaviorAnalyzer:
         yaw = abs(state.smoothed_yaw or 0.0)
         head_side = pose_recent and direction in {"Left", "Right"}
         gaze_side = pose_recent and state.gaze_direction in {"Left", "Right"}
+        body_side = body_direction in {"Left", "Right"}
 
         head_rate = 0.0
         if head_side and yaw >= self.config.head_yaw_threshold:
@@ -217,12 +248,53 @@ class BehaviorAnalyzer:
         if opposite_side:
             gaze_rate *= 0.25
 
+        body_rate = 0.0
+        if body_side:
+            body_span = max(0.05, 0.65 - self.config.body_movement_threshold)
+            body_intensity = min(
+                1.0,
+                max(
+                    0.0,
+                    (abs(body_shift) - self.config.body_movement_threshold)
+                    / body_span,
+                ),
+            )
+            body_rate = 0.45 + 0.65 * body_intensity
+
         evidence_rate = head_rate + gaze_rate
         if same_side:
             evidence_rate *= 1.35
+        evidence_rate += body_rate
         evidence_rate *= 0.75 + 0.25 * observation.confidence
 
         if movement_count >= self.config.head_movement_events:
+            state.risk_score = max(
+                state.risk_score,
+                self.config.risk_alert_score,
+            )
+
+        sustained_head_turn = (
+            head_side and look_seconds >= self.config.head_turn_alert_seconds
+        )
+        if sustained_head_turn:
+            state.risk_score = max(
+                state.risk_score,
+                self.config.risk_alert_score,
+            )
+
+        sustained_side_gaze = (
+            gaze_side and gaze_seconds >= self.config.gaze_alert_seconds
+        )
+        if sustained_side_gaze:
+            state.risk_score = max(
+                state.risk_score,
+                self.config.risk_alert_score,
+            )
+
+        sustained_body_movement = (
+            body_side and body_seconds >= self.config.body_movement_alert_seconds
+        )
+        if sustained_body_movement:
             state.risk_score = max(
                 state.risk_score,
                 self.config.risk_alert_score,
@@ -240,15 +312,41 @@ class BehaviorAnalyzer:
             )
 
         strong_head = head_side and yaw >= self.config.head_alert_yaw_threshold
-        qualifying = strong_head or gaze_side or movement_count >= self.config.head_movement_events
+        qualifying = (
+            strong_head
+            or sustained_side_gaze
+            or sustained_head_turn
+            or sustained_body_movement
+            or movement_count >= self.config.head_movement_events
+        )
         if movement_count >= self.config.head_movement_events:
             return "Repeated head movement", "repeated_head_movement", True
         if same_side:
             return f"Head and eyes looking {direction.lower()}", "head_eye_risk", True
+        if sustained_side_gaze:
+            return (
+                f"Eyes looking {state.gaze_direction.lower()} for {gaze_seconds:.1f}s",
+                "side_gaze",
+                True,
+            )
+        if sustained_head_turn:
+            return (
+                f"Head turned {direction.lower()} for {look_seconds:.1f}s",
+                "sustained_head_turn",
+                True,
+            )
+        if sustained_body_movement:
+            return (
+                f"Body shifted {body_direction.lower()} for {body_seconds:.1f}s",
+                "body_movement",
+                True,
+            )
         if gaze_side:
             return f"Eyes looking {state.gaze_direction.lower()}", "side_gaze", True
         if strong_head:
             return f"Strong head turn {direction.lower()}", "sustained_head_turn", True
+        if body_side:
+            return f"Body shifted {body_direction.lower()}", "", qualifying
         if head_side:
             return f"Head turn {direction.lower()}", "", qualifying
         return "", "", qualifying
@@ -261,6 +359,54 @@ class BehaviorAnalyzer:
         ]
         for track_id in expired:
             del self._tracks[track_id]
+
+    def _update_body_state(
+        self,
+        state: _TrackState,
+        observation: StudentObservation,
+        now: float,
+    ) -> tuple[str, float, float]:
+        center_x = observation.box.center[0]
+        body_width = float(max(1, observation.box.width))
+        if state.baseline_body_center_x is None or state.baseline_body_width is None:
+            if state.body_calibration_started is None:
+                state.body_calibration_started = now
+            state.body_calibration_centers.append(center_x)
+            state.body_calibration_widths.append(body_width)
+            elapsed = now - state.body_calibration_started
+            minimum_samples = 1 if self.config.head_calibration_seconds == 0 else 3
+            if (
+                elapsed < self.config.head_calibration_seconds
+                or len(state.body_calibration_centers) < minimum_samples
+            ):
+                state.body_direction = "Calibrating"
+                state.body_started = None
+                return state.body_direction, 0.0, 0.0
+
+            state.baseline_body_center_x = float(
+                median(state.body_calibration_centers)
+            )
+            state.baseline_body_width = float(median(state.body_calibration_widths))
+            state.body_shift_history.extend((0.0, 0.0, 0.0))
+            state.body_direction = "Center"
+            state.body_started = None
+            state.smoothed_body_shift = 0.0
+            return state.body_direction, 0.0, 0.0
+
+        reference_width = max(body_width, state.baseline_body_width, 1.0)
+        normalized_shift = (center_x - state.baseline_body_center_x) / reference_width
+        state.body_shift_history.append(normalized_shift)
+        state.smoothed_body_shift = float(median(state.body_shift_history))
+        if abs(state.smoothed_body_shift) < self.config.body_movement_threshold:
+            state.body_direction = "Center"
+            state.body_started = None
+            return state.body_direction, 0.0, state.smoothed_body_shift
+
+        direction = "Right" if state.smoothed_body_shift > 0 else "Left"
+        if state.body_started is None or direction != state.body_direction:
+            state.body_started = now
+        state.body_direction = direction
+        return direction, now - state.body_started, state.smoothed_body_shift
 
     def _update_pose_state(
         self, state: _TrackState, observation: StudentObservation, now: float

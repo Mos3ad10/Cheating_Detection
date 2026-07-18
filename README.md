@@ -1,6 +1,6 @@
 # Exam Sentinel
 
-Exam Sentinel is a Python desktop application for reviewing suspicious behavior in exam video. It detects and tracks students, checks head direction, side gaze, and repeated left/right head turns, draws green/amber/red head boxes, saves incident screenshots, records events in SQLite, and shows desktop alerts.
+Exam Sentinel is a Python desktop application for reviewing suspicious behavior in exam video. It detects and tracks students, checks sustained head turns, side gaze, lateral body shifts, and repeated left/right head turns, draws green/amber/red student boxes, saves incident screenshots, records events in SQLite, and shows desktop alerts.
 
 The application flags evidence for a human reviewer. It does not decide that a student cheated.
 
@@ -10,6 +10,7 @@ The application flags evidence for a human reviewer. It does not decide that a s
 - BoT-SORT multi-student tracking with duplicate suppression and seat-stable IDs
 - MediaPipe face landmarks with a per-student neutral head-angle calibration
 - Face/iris landmarks plus full-frame face fallback for eye-centered boxes and gaze
+- Per-student seat calibration for sustained lateral body-movement evidence
 - Repeated alternating left/right head-movement detection per tracked student
 - Adaptive per-student head/eye risk scoring with configurable thresholds and decay
 - Green normal, amber warning, and red suspicious bounding boxes
@@ -17,7 +18,8 @@ The application flags evidence for a human reviewer. It does not decide that a s
 - SQLite incident history in `data/incidents.db`
 - Review, false-alarm, and open-evidence actions
 - Remove one incident or clear all visible history while keeping saved evidence files
-- Camera input, video-file input, pause, and stop controls
+- Direct Camera 0 input, video-file input, pause, and stop controls
+- Purpose-built dark review interface with live student focus and incident queues
 - Automatic CUDA use through the RTX 4070 environment
 
 No training dataset is required for this first version. Test it with your own classroom or exam videos, then collect and label local examples only if the pretrained detector is not reliable for your camera angle.
@@ -62,8 +64,9 @@ You can also press `F5` and choose `Exam Sentinel`, or start Camera 0 directly:
 | Signal | Default rule |
 |---|---|
 | Initial calibration | Learn each student's neutral head angle for 2 seconds |
-| Head direction | Risk rises slowly beyond 18 degrees and faster beyond 35 degrees |
-| Side gaze | Relative iris shift beyond 0.35 raises risk; strong downward writing gaze is ignored |
+| Head direction | A left/right turn beyond 18 degrees held for 1 second creates an incident |
+| Side gaze | Relative iris shift beyond 0.35 held for 1 second creates an incident; strong downward writing gaze is ignored |
+| Body movement | A lateral shift beyond 0.15 body widths held for 1 second creates an incident |
 | Head + eyes | Matching head and eye direction receives a 1.35x evidence multiplier |
 | Recovery | Risk decreases by 1.25 points per second while behavior is normal |
 | Thresholds | Amber at risk 2.0; red and incident evidence at risk 5.0 |

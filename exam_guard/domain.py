@@ -87,6 +87,9 @@ class StudentResult:
     gaze_direction: str
     gaze_seconds: float
     gaze_horizontal: Optional[float]
+    body_direction: str
+    body_seconds: float
+    body_shift: float
     movement_count: int
     movement_label: str
     reason: str
@@ -103,6 +106,9 @@ class StudentResult:
             "gaze_direction": self.gaze_direction,
             "gaze_seconds": self.gaze_seconds,
             "gaze_horizontal": self.gaze_horizontal,
+            "body_direction": self.body_direction,
+            "body_seconds": self.body_seconds,
+            "body_shift": self.body_shift,
             "movement_count": self.movement_count,
             "movement_label": self.movement_label,
             "reason": self.reason,

@@ -12,13 +12,17 @@ class MonitorConfig:
     image_size: int = 640
     head_yaw_threshold: float = 18.0
     head_alert_yaw_threshold: float = 35.0
+    head_turn_alert_seconds: float = 1.0
     head_calibration_seconds: float = 2.0
     head_movement_degrees: float = 20.0
     head_movement_window: float = 4.0
     head_movement_events: int = 3
     head_movement_refractory: float = 0.75
     gaze_threshold: float = 0.35
+    gaze_alert_seconds: float = 1.0
     gaze_vertical_limit: float = 0.65
+    body_movement_threshold: float = 0.15
+    body_movement_alert_seconds: float = 1.0
     risk_warning_score: float = 2.0
     risk_alert_score: float = 5.0
     risk_decay_per_second: float = 1.25
@@ -42,6 +46,8 @@ class MonitorConfig:
             raise ValueError("Head yaw threshold must be between 5 and 45 degrees")
         if not 15.0 <= self.head_alert_yaw_threshold <= 60.0:
             raise ValueError("Head alert angle must be between 15 and 60 degrees")
+        if not 0.5 <= self.head_turn_alert_seconds <= 10.0:
+            raise ValueError("Sustained head-turn time must be between 0.5 and 10 seconds")
         if not 0.0 <= self.head_calibration_seconds <= 10.0:
             raise ValueError("Head calibration time must be between 0 and 10 seconds")
         if not 5.0 <= self.head_movement_degrees <= 45.0:
@@ -52,8 +58,14 @@ class MonitorConfig:
             raise ValueError("Head movement event count must be between 2 and 10")
         if not 0.10 <= self.gaze_threshold <= 0.90:
             raise ValueError("Eye-gaze threshold must be between 0.10 and 0.90")
+        if not 0.5 <= self.gaze_alert_seconds <= 10.0:
+            raise ValueError("Sustained side-gaze time must be between 0.5 and 10 seconds")
         if not 0.20 <= self.gaze_vertical_limit <= 1.0:
             raise ValueError("Vertical eye-gaze limit must be between 0.20 and 1.0")
+        if not 0.05 <= self.body_movement_threshold <= 0.50:
+            raise ValueError("Body movement threshold must be between 0.05 and 0.50")
+        if not 0.5 <= self.body_movement_alert_seconds <= 10.0:
+            raise ValueError("Sustained body-movement time must be between 0.5 and 10 seconds")
         if not 0.5 <= self.risk_warning_score <= 10.0:
             raise ValueError("Risk warning score must be between 0.5 and 10")
         if not self.risk_warning_score < self.risk_alert_score <= 20.0:

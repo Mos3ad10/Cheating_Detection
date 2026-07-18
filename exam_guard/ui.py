@@ -3,19 +3,29 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, Qt, QTimer, QUrl
-from PyQt6.QtGui import QColor, QCloseEvent, QDesktopServices, QImage, QPixmap
+from PyQt6.QtCore import QPointF, QRectF, QSettings, Qt, QTimer, QUrl
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QCloseEvent,
+    QDesktopServices,
+    QFont,
+    QIcon,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -40,9 +50,43 @@ from .theme import APP_STYLESHEET
 from .worker import MonitorWorker
 
 
+def _sentinel_pixmap(size: int) -> QPixmap:
+    """Create the aperture-shaped Exam Sentinel mark at any display size."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    scale = size / 64.0
+
+    eye = QPainterPath()
+    eye.moveTo(QPointF(8 * scale, 32 * scale))
+    eye.cubicTo(
+        QPointF(20 * scale, 14 * scale),
+        QPointF(44 * scale, 14 * scale),
+        QPointF(56 * scale, 32 * scale),
+    )
+    eye.cubicTo(
+        QPointF(44 * scale, 50 * scale),
+        QPointF(20 * scale, 50 * scale),
+        QPointF(8 * scale, 32 * scale),
+    )
+    painter.setPen(QPen(QColor("#35d0c5"), max(1.5, 2.5 * scale)))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawPath(eye)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(QColor("#35d0c5")))
+    painter.drawEllipse(QPointF(32 * scale, 32 * scale), 9 * scale, 9 * scale)
+    painter.setBrush(QBrush(QColor("#091015")))
+    painter.drawEllipse(QPointF(32 * scale, 32 * scale), 3.5 * scale, 3.5 * scale)
+    painter.setBrush(QBrush(QColor("#ff6575")))
+    painter.drawEllipse(QPointF(36 * scale, 28 * scale), 2 * scale, 2 * scale)
+    painter.end()
+    return pixmap
+
+
 class VideoView(QLabel):
     def __init__(self):
-        super().__init__("Select a camera or open an exam video")
+        super().__init__()
         self.setObjectName("VideoView")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(640, 420)
@@ -50,26 +94,76 @@ class VideoView(QLabel):
 
     def set_frame(self, image: QImage) -> None:
         self._image = image
-        self._render()
+        self.update()
 
     def clear_frame(self) -> None:
         self._image = None
-        self.clear()
-        self.setText("Select a camera or open an exam video")
+        self.update()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._render()
+        self.update()
 
-    def _render(self) -> None:
-        if self._image is None:
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#05080b"))
+
+        if self._image is not None:
+            pixmap = QPixmap.fromImage(self._image).scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x = (self.width() - pixmap.width()) // 2
+            y = (self.height() - pixmap.height()) // 2
+            painter.drawPixmap(x, y, pixmap)
+            painter.end()
             return
-        pixmap = QPixmap.fromImage(self._image).scaled(
-            self.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+
+        frame = QRectF(34, 30, max(0, self.width() - 68), max(0, self.height() - 60))
+        painter.setPen(QPen(QColor("#1d2a31"), 1))
+        painter.drawRect(frame)
+
+        corner = max(28.0, min(52.0, min(frame.width(), frame.height()) * 0.10))
+        painter.setPen(QPen(QColor("#35d0c5"), 2))
+        segments = (
+            (frame.left(), frame.top(), frame.left() + corner, frame.top()),
+            (frame.left(), frame.top(), frame.left(), frame.top() + corner),
+            (frame.right() - corner, frame.top(), frame.right(), frame.top()),
+            (frame.right(), frame.top(), frame.right(), frame.top() + corner),
+            (frame.left(), frame.bottom(), frame.left() + corner, frame.bottom()),
+            (frame.left(), frame.bottom() - corner, frame.left(), frame.bottom()),
+            (frame.right() - corner, frame.bottom(), frame.right(), frame.bottom()),
+            (frame.right(), frame.bottom() - corner, frame.right(), frame.bottom()),
         )
-        self.setPixmap(pixmap)
+        for x1, y1, x2, y2 in segments:
+            painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+        center_x = self.width() / 2.0
+        center_y = self.height() / 2.0 - 24.0
+        painter.setPen(QPen(QColor("#24343c"), 1))
+        painter.drawLine(QPointF(frame.left(), center_y), QPointF(frame.right(), center_y))
+        painter.setPen(QPen(QColor("#35d0c5"), 2))
+        painter.drawLine(QPointF(center_x - 18, center_y), QPointF(center_x + 18, center_y))
+
+        mark = _sentinel_pixmap(76)
+        painter.drawPixmap(int(center_x - 38), int(center_y - 96), mark)
+        painter.setPen(QColor("#eaf2f5"))
+        painter.setFont(QFont("Bahnschrift SemiCondensed", 16, QFont.Weight.DemiBold))
+        painter.drawText(
+            QRectF(0, center_y + 18, self.width(), 32),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            "MONITOR STANDBY",
+        )
+        painter.setPen(QColor("#73838b"))
+        painter.setFont(QFont("Segoe UI Variable Text", 9))
+        painter.drawText(
+            QRectF(0, center_y + 54, self.width(), 24),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            "No exam source active",
+        )
+        painter.end()
 
 
 class SettingsDialog(QDialog):
@@ -77,18 +171,26 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.config = config
         self.setWindowTitle("Detection settings")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(860)
 
         layout = QVBoxLayout(self)
-        behavior_group = QGroupBox("Behavior thresholds")
-        behavior_form = QFormLayout(behavior_group)
+        signal_group = QGroupBox("Attention signals")
+        signal_form = QFormLayout(signal_group)
+        scoring_group = QGroupBox("Movement and risk")
+        scoring_form = QFormLayout(scoring_group)
         self.gaze_threshold = self._spin(
             0.10, 0.90, config.gaze_threshold, "", 0.05, 2
+        )
+        self.gaze_alert_seconds = self._spin(
+            0.5, 10.0, config.gaze_alert_seconds, " s", 0.5
         )
         self.gaze_vertical_limit = self._spin(
             0.20, 1.0, config.gaze_vertical_limit, "", 0.05, 2
         )
         self.yaw = self._spin(5.0, 45.0, config.head_yaw_threshold, " deg", 1.0)
+        self.head_turn_seconds = self._spin(
+            0.5, 10.0, config.head_turn_alert_seconds, " s", 0.5
+        )
         self.calibration_seconds = self._spin(
             0.0, 10.0, config.head_calibration_seconds, " s", 0.5
         )
@@ -101,6 +203,12 @@ class SettingsDialog(QDialog):
         self.movement_events = QSpinBox()
         self.movement_events.setRange(2, 10)
         self.movement_events.setValue(config.head_movement_events)
+        self.body_threshold = self._spin(
+            0.05, 0.50, config.body_movement_threshold, "", 0.05, 2
+        )
+        self.body_alert_seconds = self._spin(
+            0.5, 10.0, config.body_movement_alert_seconds, " s", 0.5
+        )
         self.risk_warning = self._spin(
             0.5, 10.0, config.risk_warning_score, "", 0.5
         )
@@ -114,18 +222,22 @@ class SettingsDialog(QDialog):
             0.0, 3.0, config.pose_gap_grace_seconds, " s", 0.1
         )
         self.cooldown = self._spin(1.0, 120.0, config.incident_cooldown, " s", 1.0)
-        behavior_form.addRow("Side gaze threshold", self.gaze_threshold)
-        behavior_form.addRow("Downward gaze filter", self.gaze_vertical_limit)
-        behavior_form.addRow("Head yaw", self.yaw)
-        behavior_form.addRow("Per-student calibration", self.calibration_seconds)
-        behavior_form.addRow("Movement angle", self.movement_angle)
-        behavior_form.addRow("Movement window", self.movement_window)
-        behavior_form.addRow("Movements to flag", self.movement_events)
-        behavior_form.addRow("Risk warning", self.risk_warning)
-        behavior_form.addRow("Risk alert", self.risk_alert)
-        behavior_form.addRow("Risk decay", self.risk_decay)
-        behavior_form.addRow("Pose-loss grace", self.pose_grace)
-        behavior_form.addRow("Repeat alert cooldown", self.cooldown)
+        signal_form.addRow("Side gaze threshold", self.gaze_threshold)
+        signal_form.addRow("Sustained side gaze", self.gaze_alert_seconds)
+        signal_form.addRow("Downward gaze filter", self.gaze_vertical_limit)
+        signal_form.addRow("Head yaw", self.yaw)
+        signal_form.addRow("Sustained head turn", self.head_turn_seconds)
+        signal_form.addRow("Per-student calibration", self.calibration_seconds)
+        signal_form.addRow("Body shift threshold", self.body_threshold)
+        signal_form.addRow("Sustained body shift", self.body_alert_seconds)
+        scoring_form.addRow("Movement angle", self.movement_angle)
+        scoring_form.addRow("Movement window", self.movement_window)
+        scoring_form.addRow("Movements to flag", self.movement_events)
+        scoring_form.addRow("Risk warning", self.risk_warning)
+        scoring_form.addRow("Risk alert", self.risk_alert)
+        scoring_form.addRow("Risk decay", self.risk_decay)
+        scoring_form.addRow("Pose-loss grace", self.pose_grace)
+        scoring_form.addRow("Repeat alert cooldown", self.cooldown)
 
         detector_group = QGroupBox("Detector")
         detector_form = QFormLayout(detector_group)
@@ -140,18 +252,33 @@ class SettingsDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(behavior_group)
-        layout.addWidget(detector_group)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
+        left_column = QVBoxLayout()
+        left_column.setSpacing(10)
+        left_column.addWidget(signal_group)
+        left_column.addWidget(detector_group)
+        right_column = QVBoxLayout()
+        right_column.addWidget(scoring_group)
+        right_column.addStretch()
+        columns.addLayout(left_column, 1)
+        columns.addLayout(right_column, 1)
+        layout.addLayout(columns)
         layout.addWidget(buttons)
 
     def apply(self) -> None:
         self.config.gaze_threshold = self.gaze_threshold.value()
+        self.config.gaze_alert_seconds = self.gaze_alert_seconds.value()
         self.config.gaze_vertical_limit = self.gaze_vertical_limit.value()
         self.config.head_yaw_threshold = self.yaw.value()
+        self.config.head_turn_alert_seconds = self.head_turn_seconds.value()
         self.config.head_calibration_seconds = self.calibration_seconds.value()
         self.config.head_movement_degrees = self.movement_angle.value()
         self.config.head_movement_window = self.movement_window.value()
         self.config.head_movement_events = self.movement_events.value()
+        self.config.body_movement_threshold = self.body_threshold.value()
+        self.config.body_movement_alert_seconds = self.body_alert_seconds.value()
         self.config.risk_warning_score = self.risk_warning.value()
         self.config.risk_alert_score = self.risk_alert.value()
         self.config.risk_decay_per_second = self.risk_decay.value()
@@ -206,9 +333,9 @@ class AlertToast(QFrame):
 
 class ExamMonitorWindow(QMainWindow):
     STATUS_COLORS = {
-        "Normal": QColor("#2b8a57"),
-        "Warning": QColor("#b36a10"),
-        "Suspicious": QColor("#c94747"),
+        "Normal": QColor("#49d49d"),
+        "Warning": QColor("#f3b85b"),
+        "Suspicious": QColor("#ff6878"),
     }
 
     def __init__(self, project_root: Path):
@@ -221,32 +348,47 @@ class ExamMonitorWindow(QMainWindow):
         self._session_incidents = 0
         self._latest_states: list[dict] = []
 
-        self.setWindowTitle("Exam Sentinel")
-        self.resize(1460, 860)
-        self.setMinimumSize(1100, 700)
+        self.setWindowTitle("Exam Sentinel | Exam Integrity Monitor")
+        self.setWindowIcon(QIcon(_sentinel_pixmap(64)))
+        self.resize(1500, 900)
+        self.setMinimumSize(1120, 720)
         self.setStyleSheet(APP_STYLESHEET)
         self._build_ui()
         self._refresh_incidents()
 
     def _build_ui(self) -> None:
         root = QWidget()
+        root.setObjectName("AppRoot")
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
         root_layout.addWidget(self._build_header())
 
         body = QWidget()
+        body.setObjectName("AppBody")
         body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(14, 12, 14, 8)
-        body_layout.setSpacing(10)
+        body_layout.setContentsMargins(18, 14, 18, 10)
+        body_layout.setSpacing(12)
         body_layout.addWidget(self._build_metrics())
         body_layout.addWidget(self._build_workspace(), 1)
 
-        footer = QHBoxLayout()
+        footer_shell = QFrame()
+        footer_shell.setObjectName("Footer")
+        footer = QHBoxLayout(footer_shell)
+        footer.setContentsMargins(4, 0, 4, 0)
+        footer.setSpacing(8)
+        footer_dot = QFrame()
+        footer_dot.setObjectName("FooterDot")
+        footer_dot.setFixedSize(6, 6)
+        footer.addWidget(footer_dot)
         self.footer_status = QLabel("Ready")
         self.footer_status.setObjectName("FooterStatus")
         footer.addWidget(self.footer_status)
-        body_layout.addLayout(footer)
+        footer.addStretch()
+        policy = QLabel("AI-assisted evidence | Human review required")
+        policy.setObjectName("Policy")
+        footer.addWidget(policy)
+        body_layout.addWidget(footer_shell)
         root_layout.addWidget(body, 1)
         self.setCentralWidget(root)
 
@@ -254,36 +396,39 @@ class ExamMonitorWindow(QMainWindow):
         header = QFrame()
         header.setObjectName("Header")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(16, 10, 16, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(20, 12, 20, 12)
+        layout.setSpacing(10)
+
+        mark = QLabel()
+        mark.setObjectName("BrandMark")
+        mark.setPixmap(_sentinel_pixmap(44))
+        mark.setFixedSize(48, 48)
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(mark)
 
         brand_box = QVBoxLayout()
-        brand_box.setSpacing(0)
-        accent = QLabel("LIVE EXAM OPERATIONS")
+        brand_box.setSpacing(1)
+        accent = QLabel("EXAM INTEGRITY OPERATIONS")
         accent.setObjectName("BrandAccent")
-        brand = QLabel("EXAM SENTINEL")
+        brand = QLabel("Exam Sentinel")
         brand.setObjectName("Brand")
         brand_box.addWidget(accent)
         brand_box.addWidget(brand)
         layout.addLayout(brand_box)
 
-        self.state_badge = QLabel("IDLE")
+        self.state_badge = QLabel("STANDBY")
         self.state_badge.setObjectName("StateBadge")
         self.state_badge.setProperty("state", "idle")
         layout.addWidget(self.state_badge)
         layout.addStretch()
 
-        self.camera_select = QComboBox()
-        self.camera_select.addItems([f"Camera {index}" for index in range(5)])
-        self.camera_select.setFixedWidth(110)
-        self.camera_button = QPushButton("Start camera")
+        self.camera_button = QPushButton("Start live camera")
         self.camera_button.setProperty("primary", True)
         self.camera_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self.camera_button.clicked.connect(self._start_camera)
-        layout.addWidget(self.camera_select)
         layout.addWidget(self.camera_button)
 
-        self.video_button = QPushButton("Open video")
+        self.video_button = QPushButton("Open exam video")
         self.video_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         self.video_button.clicked.connect(self._open_video)
         layout.addWidget(self.video_button)
@@ -302,7 +447,12 @@ class ExamMonitorWindow(QMainWindow):
         self.stop_button.clicked.connect(self.stop_monitoring)
         layout.addWidget(self.stop_button)
 
-        self.settings_button = QPushButton("Settings")
+        divider = QFrame()
+        divider.setObjectName("HeaderDivider")
+        divider.setFrameShape(QFrame.Shape.VLine)
+        layout.addWidget(divider)
+
+        self.settings_button = QPushButton("Detection settings")
         self.settings_button.clicked.connect(self._open_settings)
         layout.addWidget(self.settings_button)
         return header
@@ -310,28 +460,57 @@ class ExamMonitorWindow(QMainWindow):
     def _build_metrics(self) -> QWidget:
         strip = QFrame()
         strip.setObjectName("MetricStrip")
-        layout = QGridLayout(strip)
-        layout.setContentsMargins(14, 8, 14, 8)
-        layout.setHorizontalSpacing(28)
+        layout = QHBoxLayout(strip)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        self.source_value = self._add_metric(layout, 0, "SOURCE", "None")
-        self.students_value = self._add_metric(layout, 1, "TRACKED", "0")
-        self.flags_value = self._add_metric(layout, 2, "SESSION FLAGS", "0")
-        self.attention_value = self._add_metric(layout, 3, "ATTENTION", "Clear")
-        layout.setColumnStretch(0, 2)
-        for column in (1, 2, 3):
-            layout.setColumnStretch(column, 1)
+        self.source_value = self._add_metric(layout, "SOURCE", "Not connected", 2)
+        self.students_value = self._add_metric(layout, "TRACKED STUDENTS", "0")
+        self.flags_value = self._add_metric(layout, "SESSION FLAGS", "0")
+        self.attention_value = self._add_metric(layout, "ATTENTION", "Clear")
+        self.threshold_value = self._add_metric(
+            layout,
+            "SUSTAINED ALERTS",
+            self._threshold_summary(),
+            accent=True,
+            compact=True,
+            last=True,
+        )
         return strip
 
+    def _threshold_summary(self) -> str:
+        return (
+            f"H {self.config.head_turn_alert_seconds:.1f}  "
+            f"E {self.config.gaze_alert_seconds:.1f}  "
+            f"B {self.config.body_movement_alert_seconds:.1f} s"
+        )
+
     @staticmethod
-    def _add_metric(layout: QGridLayout, column: int, label: str, value: str) -> QLabel:
+    def _add_metric(
+        layout: QHBoxLayout,
+        label: str,
+        value: str,
+        stretch: int = 1,
+        accent: bool = False,
+        compact: bool = False,
+        last: bool = False,
+    ) -> QLabel:
+        cell = QFrame()
+        cell.setObjectName("MetricCell")
+        cell.setProperty("last", last)
+        cell_layout = QVBoxLayout(cell)
+        cell_layout.setContentsMargins(16, 10, 16, 10)
+        cell_layout.setSpacing(2)
         label_widget = QLabel(label)
         label_widget.setObjectName("MetricLabel")
         value_widget = QLabel(value)
         value_widget.setObjectName("MetricValue")
-        value_widget.setMinimumWidth(100)
-        layout.addWidget(label_widget, 0, column)
-        layout.addWidget(value_widget, 1, column)
+        value_widget.setProperty("accent", accent)
+        value_widget.setProperty("compact", compact)
+        value_widget.setMinimumWidth(90)
+        cell_layout.addWidget(label_widget)
+        cell_layout.addWidget(value_widget)
+        layout.addWidget(cell, stretch)
         return value_widget
 
     def _build_workspace(self) -> QWidget:
@@ -341,7 +520,32 @@ class ExamMonitorWindow(QMainWindow):
         video_shell = QFrame()
         video_shell.setObjectName("VideoShell")
         video_layout = QVBoxLayout(video_shell)
-        video_layout.setContentsMargins(6, 6, 6, 6)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        video_layout.setSpacing(0)
+        video_header = QFrame()
+        video_header.setObjectName("PanelHeader")
+        video_header.setFixedHeight(42)
+        video_header_layout = QHBoxLayout(video_header)
+        video_header_layout.setContentsMargins(14, 10, 14, 10)
+        video_header_layout.setSpacing(10)
+        video_title = QLabel("LIVE ANALYSIS")
+        video_title.setObjectName("SectionTitle")
+        video_header_layout.addWidget(video_title)
+        video_header_layout.addStretch()
+        for label, state in (
+            ("Normal", "normal"),
+            ("Watch", "warning"),
+            ("Flagged", "alert"),
+        ):
+            swatch = QFrame()
+            swatch.setObjectName("LegendSwatch")
+            swatch.setProperty("state", state)
+            swatch.setFixedSize(7, 7)
+            video_header_layout.addWidget(swatch)
+            legend_label = QLabel(label)
+            legend_label.setObjectName("LegendLabel")
+            video_header_layout.addWidget(legend_label)
+        video_layout.addWidget(video_header)
         self.video_view = VideoView()
         video_layout.addWidget(self.video_view)
         splitter.addWidget(video_shell)
@@ -349,14 +553,28 @@ class ExamMonitorWindow(QMainWindow):
         side_rail = QFrame()
         side_rail.setObjectName("SideRail")
         side_rail.setMinimumWidth(390)
-        side_rail.setMaximumWidth(500)
+        side_rail.setMaximumWidth(520)
         side_layout = QVBoxLayout(side_rail)
-        side_layout.setContentsMargins(8, 8, 8, 8)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(0)
+        rail_header = QFrame()
+        rail_header.setObjectName("PanelHeader")
+        rail_header.setFixedHeight(42)
+        rail_header_layout = QHBoxLayout(rail_header)
+        rail_header_layout.setContentsMargins(14, 10, 14, 10)
+        rail_title = QLabel("REVIEW DESK")
+        rail_title.setObjectName("SectionTitle")
+        rail_header_layout.addWidget(rail_title)
+        rail_header_layout.addStretch()
+        rail_hint = QLabel("HUMAN DECISION")
+        rail_hint.setObjectName("RailHint")
+        rail_header_layout.addWidget(rail_hint)
+        side_layout.addWidget(rail_header)
         self.tabs = QTabWidget()
         self.student_table = self._build_student_table()
         incident_page = self._build_incident_page()
-        self.tabs.addTab(self.student_table, "Students")
-        self.tabs.addTab(incident_page, "Incidents")
+        self.tabs.addTab(self.student_table, "Student focus")
+        self.tabs.addTab(incident_page, "Incident queue")
         side_layout.addWidget(self.tabs)
         splitter.addWidget(side_rail)
         splitter.setSizes([980, 410])
@@ -364,7 +582,8 @@ class ExamMonitorWindow(QMainWindow):
 
     def _build_student_table(self) -> QTableWidget:
         table = QTableWidget(0, 4)
-        table.setHorizontalHeaderLabels(["ID", "STATE", "HEAD / EYES", "RISK"])
+        table.setObjectName("StudentTable")
+        table.setHorizontalHeaderLabels(["ID", "STATE", "HEAD / EYES / BODY", "RISK"])
         table.setAlternatingRowColors(True)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -378,9 +597,12 @@ class ExamMonitorWindow(QMainWindow):
 
     def _build_incident_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("IncidentPage")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
         self.incident_table = QTableWidget(0, 4)
+        self.incident_table.setObjectName("IncidentTable")
         self.incident_table.setHorizontalHeaderLabels(["TIME", "STUDENT", "EVENT", "STATUS"])
         self.incident_table.setAlternatingRowColors(True)
         self.incident_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -396,9 +618,12 @@ class ExamMonitorWindow(QMainWindow):
         layout.addWidget(self.incident_table, 1)
 
         review_actions = QHBoxLayout()
+        review_actions.setSpacing(6)
         evidence_button = QPushButton("Open evidence")
+        evidence_button.setProperty("primary", True)
         evidence_button.clicked.connect(self._open_evidence)
         reviewed_button = QPushButton("Mark reviewed")
+        reviewed_button.setProperty("confirm", True)
         reviewed_button.clicked.connect(lambda: self._set_incident_status("Reviewed"))
         false_alarm_button = QPushButton("False alarm")
         false_alarm_button.setProperty("destructive", True)
@@ -409,6 +634,7 @@ class ExamMonitorWindow(QMainWindow):
         layout.addLayout(review_actions)
 
         selection_actions = QHBoxLayout()
+        selection_actions.setSpacing(6)
         folder_button = QPushButton("Evidence folder")
         folder_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
@@ -421,6 +647,7 @@ class ExamMonitorWindow(QMainWindow):
         layout.addLayout(selection_actions)
 
         history_actions = QHBoxLayout()
+        history_actions.setSpacing(6)
         delete_button = QPushButton("Delete selected")
         delete_button.setProperty("destructive", True)
         delete_button.clicked.connect(self._delete_selected_incident)
@@ -439,7 +666,9 @@ class ExamMonitorWindow(QMainWindow):
         self._paused = False
         self._session_incidents = 0
         self.flags_value.setText("0")
-        self.source_value.setText(f"Camera {source}" if isinstance(source, int) else Path(source).name)
+        source_name = f"Camera {source}" if isinstance(source, int) else Path(source).name
+        self.source_value.setText(source_name)
+        self.source_value.setToolTip(source_name)
         worker = MonitorWorker(source, self.config, self.project_root, self)
         self.worker = worker
         worker.frame_ready.connect(self.video_view.set_frame)
@@ -461,7 +690,7 @@ class ExamMonitorWindow(QMainWindow):
         self.footer_status.setText("Stopping monitoring")
 
     def _start_camera(self) -> None:
-        self.start_source(self.camera_select.currentIndex())
+        self.start_source(0)
 
     def _open_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -492,6 +721,8 @@ class ExamMonitorWindow(QMainWindow):
             head_state = state["direction"]
             if state.get("gaze_direction") in {"Left", "Right"}:
                 head_state += f" | Eyes {state['gaze_direction']}"
+            if state.get("body_direction") in {"Left", "Right"}:
+                head_state += f" | Body {state['body_direction']}"
             if state.get("movement_count", 0):
                 head_state += (
                     f" | Changes {state['movement_count']}/"
@@ -506,7 +737,9 @@ class ExamMonitorWindow(QMainWindow):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column == 1:
-                    item.setForeground(self.STATUS_COLORS.get(state["status"], QColor("#18211e")))
+                    item.setForeground(
+                        self.STATUS_COLORS.get(state["status"], QColor("#eaf2f5"))
+                    )
                 self.student_table.setItem(row, column, item)
         self.students_value.setText(str(len(states)))
         suspicious = sum(state["status"] == "Suspicious" for state in states)
@@ -535,6 +768,7 @@ class ExamMonitorWindow(QMainWindow):
 
     def _refresh_incidents(self) -> None:
         incidents = self.database.list_incidents()
+        self.tabs.setTabText(1, f"Incident queue ({len(incidents)})")
         self.incident_table.setRowCount(len(incidents))
         for row, incident in enumerate(incidents):
             try:
@@ -551,7 +785,7 @@ class ExamMonitorWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, incident)
                 if column == 3 and value == "Needs review":
-                    item.setForeground(QColor("#c94747"))
+                    item.setForeground(QColor("#ff6878"))
                 self.incident_table.setItem(row, column, item)
 
     def _selected_incident(self) -> dict | None:
@@ -646,6 +880,7 @@ class ExamMonitorWindow(QMainWindow):
             try:
                 dialog.apply()
                 self._save_config()
+                self.threshold_value.setText(self._threshold_summary())
                 self.footer_status.setText("Detection settings saved")
             except ValueError as exc:
                 QMessageBox.warning(self, "Invalid settings", str(exc))
@@ -653,7 +888,6 @@ class ExamMonitorWindow(QMainWindow):
     def _set_running_controls(self, running: bool) -> None:
         self.camera_button.setEnabled(not running)
         self.video_button.setEnabled(not running)
-        self.camera_select.setEnabled(not running)
         self.pause_button.setEnabled(running)
         self.stop_button.setEnabled(running)
         self.settings_button.setEnabled(not running)
@@ -667,7 +901,7 @@ class ExamMonitorWindow(QMainWindow):
             finished_worker.deleteLater()
             return
         self._set_running_controls(False)
-        self._set_state("IDLE", "idle")
+        self._set_state("STANDBY", "idle")
         self.students_value.setText("0")
         self.attention_value.setText("Clear")
         self.student_table.setRowCount(0)
@@ -705,9 +939,20 @@ class ExamMonitorWindow(QMainWindow):
             settings.setValue("risk_decay_per_second", 1.25)
             settings.setValue("pose_gap_grace_seconds", 0.60)
             settings.setValue("behavior_config_version", 5)
+        if behavior_version < 6:
+            settings.setValue("head_turn_alert_seconds", 1.0)
+            settings.setValue("behavior_config_version", 6)
+        if behavior_version < 7:
+            settings.setValue("gaze_alert_seconds", 1.0)
+            settings.setValue("body_movement_threshold", 0.15)
+            settings.setValue("body_movement_alert_seconds", 1.0)
+            settings.setValue("behavior_config_version", 7)
         return MonitorConfig(
             confidence=settings.value("confidence", 0.35, float),
             head_yaw_threshold=settings.value("head_yaw_threshold", 18.0, float),
+            head_turn_alert_seconds=settings.value(
+                "head_turn_alert_seconds", 1.0, float
+            ),
             head_calibration_seconds=settings.value(
                 "head_calibration_seconds", 2.0, float
             ),
@@ -715,7 +960,14 @@ class ExamMonitorWindow(QMainWindow):
             head_movement_window=settings.value("head_movement_window", 4.0, float),
             head_movement_events=settings.value("head_movement_events", 3, int),
             gaze_threshold=settings.value("gaze_threshold", 0.35, float),
+            gaze_alert_seconds=settings.value("gaze_alert_seconds", 1.0, float),
             gaze_vertical_limit=settings.value("gaze_vertical_limit", 0.65, float),
+            body_movement_threshold=settings.value(
+                "body_movement_threshold", 0.15, float
+            ),
+            body_movement_alert_seconds=settings.value(
+                "body_movement_alert_seconds", 1.0, float
+            ),
             risk_warning_score=settings.value("risk_warning_score", 2.0, float),
             risk_alert_score=settings.value("risk_alert_score", 5.0, float),
             risk_decay_per_second=settings.value(
@@ -733,13 +985,23 @@ class ExamMonitorWindow(QMainWindow):
         settings.setValue("confidence", self.config.confidence)
         settings.setValue("head_yaw_threshold", self.config.head_yaw_threshold)
         settings.setValue(
+            "head_turn_alert_seconds", self.config.head_turn_alert_seconds
+        )
+        settings.setValue(
             "head_calibration_seconds", self.config.head_calibration_seconds
         )
         settings.setValue("head_movement_degrees", self.config.head_movement_degrees)
         settings.setValue("head_movement_window", self.config.head_movement_window)
         settings.setValue("head_movement_events", self.config.head_movement_events)
         settings.setValue("gaze_threshold", self.config.gaze_threshold)
+        settings.setValue("gaze_alert_seconds", self.config.gaze_alert_seconds)
         settings.setValue("gaze_vertical_limit", self.config.gaze_vertical_limit)
+        settings.setValue(
+            "body_movement_threshold", self.config.body_movement_threshold
+        )
+        settings.setValue(
+            "body_movement_alert_seconds", self.config.body_movement_alert_seconds
+        )
         settings.setValue("risk_warning_score", self.config.risk_warning_score)
         settings.setValue("risk_alert_score", self.config.risk_alert_score)
         settings.setValue(
@@ -750,7 +1012,7 @@ class ExamMonitorWindow(QMainWindow):
         )
         settings.setValue("incident_cooldown", self.config.incident_cooldown)
         settings.setValue("audio_alerts", self.config.audio_alerts)
-        settings.setValue("behavior_config_version", 5)
+        settings.setValue("behavior_config_version", 7)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.worker is not None:

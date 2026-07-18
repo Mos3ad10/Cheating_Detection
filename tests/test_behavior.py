@@ -10,6 +10,7 @@ class BehaviorAnalyzerTests(unittest.TestCase):
         self.config = MonitorConfig(
             head_yaw_threshold=10.0,
             head_alert_yaw_threshold=18.0,
+            head_turn_alert_seconds=1.0,
             risk_warning_score=1.0,
             risk_alert_score=2.0,
             risk_decay_per_second=1.0,
@@ -20,16 +21,24 @@ class BehaviorAnalyzerTests(unittest.TestCase):
             head_movement_events=3,
             head_calibration_seconds=0.0,
             gaze_threshold=0.30,
+            gaze_alert_seconds=1.0,
+            body_movement_threshold=0.15,
+            body_movement_alert_seconds=1.0,
         )
         self.analyzer = BehaviorAnalyzer(self.config)
         self.box = Box(10, 10, 200, 300)
 
     def observation(
-        self, yaw=0.0, track_id=1, gaze=0.0, vertical_gaze=0.0
+        self,
+        yaw=0.0,
+        track_id=1,
+        gaze=0.0,
+        vertical_gaze=0.0,
+        box=None,
     ):
         return StudentObservation(
             track_id=track_id,
-            box=self.box,
+            box=box or self.box,
             confidence=0.9,
             head_pose=HeadPose(
                 yaw=yaw,
@@ -51,13 +60,23 @@ class BehaviorAnalyzerTests(unittest.TestCase):
         warning, _ = self.analyzer.update(self.observation(yaw=24.0), 1.2)
         self.assertEqual(warning.status, "Warning")
 
-        self.analyzer.update(self.observation(yaw=24.0), 1.6)
-        flagged, triggers = self.analyzer.update(self.observation(yaw=24.0), 2.0)
+        flagged, triggers = self.analyzer.update(self.observation(yaw=24.0), 1.6)
         self.assertEqual(flagged.status, "Suspicious")
         self.assertEqual(triggers[0].behavior, "sustained_head_turn")
+        self.assertGreaterEqual(flagged.look_seconds, 1.0)
 
-        _, duplicate = self.analyzer.update(self.observation(yaw=24.0), 2.4)
+        _, duplicate = self.analyzer.update(self.observation(yaw=24.0), 2.0)
         self.assertEqual(duplicate, [])
+
+    def test_head_turn_shorter_than_one_second_does_not_trigger(self):
+        self.analyzer.update(self.observation(yaw=0.0), 30.0)
+        self.analyzer.update(self.observation(yaw=24.0), 30.2)
+        self.analyzer.update(self.observation(yaw=24.0), 30.4)
+        result, triggers = self.analyzer.update(self.observation(yaw=24.0), 31.0)
+
+        self.assertLess(result.look_seconds, 1.0)
+        self.assertNotEqual(result.status, "Suspicious")
+        self.assertEqual(triggers, [])
 
     def test_forward_pose_decays_dynamic_risk(self):
         self.analyzer.update(self.observation(yaw=0.0), 0.0)
@@ -94,14 +113,53 @@ class BehaviorAnalyzerTests(unittest.TestCase):
         self.assertEqual(warning.status, "Warning")
         self.assertEqual(triggers, [])
 
-        self.analyzer.update(self.observation(gaze=-0.7), 8.6)
-        flagged, triggers = self.analyzer.update(self.observation(gaze=-0.7), 9.0)
+        flagged, triggers = self.analyzer.update(self.observation(gaze=-0.7), 8.6)
         self.assertEqual(flagged.status, "Suspicious")
         self.assertEqual(triggers[0].behavior, "side_gaze")
+        self.assertGreaterEqual(flagged.gaze_seconds, 1.0)
 
-        held, duplicate = self.analyzer.update(self.observation(gaze=0.0), 9.2)
+        held, duplicate = self.analyzer.update(self.observation(gaze=0.0), 9.0)
         self.assertEqual(held.status, "Suspicious")
         self.assertEqual(duplicate, [])
+
+    def test_sustained_body_shift_triggers_after_one_second(self):
+        shifted_box = Box(60, 10, 250, 300)
+        self.analyzer.update(self.observation(), 40.0)
+        self.analyzer.update(self.observation(box=shifted_box), 40.2)
+        self.analyzer.update(self.observation(box=shifted_box), 40.4)
+        watching, triggers = self.analyzer.update(
+            self.observation(box=shifted_box), 41.0
+        )
+        self.assertNotEqual(watching.status, "Suspicious")
+        self.assertEqual(triggers, [])
+
+        flagged, triggers = self.analyzer.update(
+            self.observation(box=shifted_box), 41.4
+        )
+        self.assertEqual(flagged.status, "Suspicious")
+        self.assertEqual(flagged.body_direction, "Right")
+        self.assertGreaterEqual(flagged.body_seconds, 1.0)
+        self.assertEqual(triggers[0].behavior, "body_movement")
+
+    def test_small_body_box_jitter_does_not_trigger(self):
+        self.analyzer.update(self.observation(), 50.0)
+        triggers = []
+        result = None
+        for timestamp, offset in ((50.2, 5), (50.6, -7), (51.0, 8), (51.5, -4)):
+            jittered = Box(
+                self.box.x1 + offset,
+                self.box.y1,
+                self.box.x2 + offset,
+                self.box.y2,
+            )
+            result, new_triggers = self.analyzer.update(
+                self.observation(box=jittered), timestamp
+            )
+            triggers.extend(new_triggers)
+
+        self.assertEqual(result.body_direction, "Center")
+        self.assertEqual(result.status, "Normal")
+        self.assertEqual(triggers, [])
 
     def test_downward_writing_gaze_does_not_trigger_side_gaze(self):
         self.analyzer.update(self.observation(gaze=0.0), 20.0)
