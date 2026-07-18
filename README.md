@@ -1,103 +1,186 @@
 # Exam Sentinel
 
-Exam Sentinel is a Python desktop application for reviewing suspicious behavior in exam video. It detects and tracks students, checks sustained head turns, side gaze, lateral body shifts, and repeated left/right head turns, draws green/amber/red student boxes, saves incident screenshots, records events in SQLite, and shows desktop alerts.
+Exam Sentinel is a dark-themed Python desktop application for AI-assisted exam
+monitoring and incident review. It detects and tracks multiple students, evaluates
+head direction, side eye gaze, lateral body shifts, and repeated head movement,
+then saves reviewable evidence when configured rules are reached.
 
-The application flags evidence for a human reviewer. It does not decide that a student cheated.
+> Exam Sentinel highlights behavior for a human reviewer. It does not determine
+> that a student cheated.
 
-## Included features
+## Highlights
 
-- YOLO11 person detection using pretrained COCO weights
-- BoT-SORT multi-student tracking with duplicate suppression and seat-stable IDs
-- MediaPipe face landmarks with a per-student neutral head-angle calibration
-- Face/iris landmarks plus full-frame face fallback for eye-centered boxes and gaze
-- Per-student seat calibration for sustained lateral body-movement evidence
-- Repeated alternating left/right head-movement detection per tracked student
-- Adaptive per-student head/eye risk scoring with configurable thresholds and decay
-- Green normal, amber warning, and red suspicious bounding boxes
-- Automatic JPEG evidence in `screenshots/`
-- SQLite incident history in `data/incidents.db`
-- Review, false-alarm, and open-evidence actions
-- Remove one incident or clear all visible history while keeping saved evidence files
-- Direct Camera 0 input, video-file input, pause, and stop controls
-- Purpose-built dark review interface with live student focus and incident queues
-- Automatic CUDA use through the RTX 4070 environment
+- Multi-student person detection with YOLO11
+- BoT-SORT tracking with duplicate suppression and seat-stable student IDs
+- MediaPipe face and iris landmarks for calibrated head pose and eye gaze
+- Per-student seat calibration for lateral body-shift detection
+- One-second sustained alerts for head turns, side gaze, and body shifts
+- Repeated alternating left/right head-movement detection
+- Green, amber, and red overlays for normal, warning, and suspicious states
+- Automatic incident screenshots and persistent SQLite history
+- Review, false-alarm, evidence, multi-select, delete, and clear-history actions
+- Professional PyQt6 desktop interface with live analysis and review queues
+- Direct Camera 0 startup with no camera-selection menu
+- Video-file analysis with pause and stop controls
+- Automatic CUDA use when supported by the active PyTorch environment
 
-No training dataset is required for this first version. Test it with your own classroom or exam videos, then collect and label local examples only if the pretrained detector is not reliable for your camera angle.
+## Detection Pipeline
 
-## One-time setup
-
-Open the folder in VS Code:
-
-```powershell
-cd "D:\CV_INSTANT\Project 3"
-code .
+```text
+Camera 0 or exam video
+        |
+        v
+YOLO11 person detection
+        |
+        v
+BoT-SORT tracking and stable student IDs
+        |
+        v
+MediaPipe head pose and iris gaze + body-position baseline
+        |
+        v
+Per-student behavior scoring and one-second sustained rules
+        |
+        +--> Live colored overlays and student focus table
+        |
+        +--> Evidence screenshot and SQLite incident queue
 ```
 
-In the VS Code terminal, run:
+Behavior timing for video files uses the video's own timestamps. Detection speed
+therefore does not change the meaning of a one-second rule.
+
+## Default Rules
+
+| Signal | Default behavior |
+|---|---|
+| Initial calibration | Learn each student's neutral head angle and seat position for 2 seconds |
+| Sustained head turn | Left/right turn beyond 18 degrees for 1 second |
+| Sustained side gaze | Relative iris shift beyond 0.35 for 1 second |
+| Writing-gaze filter | Ignore side-gaze evidence when vertical gaze exceeds 0.65 |
+| Sustained body shift | Lateral movement beyond 0.15 body widths for 1 second |
+| Head and eyes | Matching directions receive a 1.35x evidence multiplier |
+| Repeated head movement | 3 alternating turns of at least 20 degrees within 4 seconds |
+| Warning threshold | Risk score 2.0 |
+| Incident threshold | Risk score 5.0 |
+| Recovery | Risk decreases by 1.25 points per second during normal behavior |
+| Landmark grace | Preserve recent evidence for 0.6 seconds during brief landmark loss |
+| Repeat incident | Allow the same signal to create another incident after 15 seconds |
+
+All detection values can be changed from **Detection settings** before monitoring
+starts.
+
+## Desktop Workflow
+
+1. Select **Start live camera** to open Camera 0, or select **Open exam video**.
+2. Wait for each visible student to complete the short calibration period.
+3. Monitor the live analysis stage and the **Student focus** table.
+4. Review new evidence in the **Incident queue**.
+5. Mark each selected incident as reviewed or as a false alarm.
+
+The pause, stop, evidence-folder, select-all, delete-selected, and clear-history
+controls remain available throughout the review workflow. Deleting database records
+does not delete their saved evidence screenshots.
+
+## Requirements
+
+- Windows 10 or Windows 11
+- Python 3.10.19
+- A webcam for live monitoring, or a supported exam video
+- Optional NVIDIA CUDA environment for GPU acceleration
+
+Core packages are pinned in `requirements.txt`:
+
+- PyQt6
+- MediaPipe
+- OpenCV
+- PyTorch
+- Ultralytics YOLO
+- NumPy
+- LAP
+
+## Installation
+
+Clone the repository and enter the project folder:
 
 ```powershell
-.\setup.ps1
+git clone https://github.com/Mos3ad10/Cheating_Detection.git
+cd Cheating_Detection
 ```
 
-The setup creates `.venv`, reuses the CUDA-enabled `subway_rl` environment, installs PyQt6 and MediaPipe, and downloads `models/yolo11n.pt`.
+Run the setup script with the Python installation or Conda environment that should
+provide the base runtime:
+
+```powershell
+.\setup.ps1 -BasePython "C:\path\to\python.exe"
+```
+
+The setup script creates `.venv`, installs the pinned dependencies, downloads the
+pretrained `yolo11n.pt` model into `models/`, and reports the selected PyTorch
+device. On the original development machine, running `.\setup.ps1` without an
+argument uses the configured `subway_rl` Conda environment.
 
 ## Run
+
+Open the desktop application:
 
 ```powershell
 .\run.ps1
 ```
 
-You can also press `F5` and choose `Exam Sentinel`, or start Camera 0 directly:
+Optional command-line sources:
 
 ```powershell
 .\run.ps1 --camera 0
+.\run.ps1 --video "D:\path\to\exam-video.mp4"
 ```
 
+The desktop camera button always uses Camera 0. Other camera indexes remain
+available through the `--camera` command-line option.
+
+## Evidence and History
+
+Generated runtime data is kept locally:
+
+```text
+data/incidents.db   Persistent SQLite incident history
+screenshots/        JPEG evidence captured when an incident is created
+```
+
+One continuous behavior episode creates at most one incident until the signal
+clears. A suspicious student's overlay remains red for five seconds so a brief
+landmark dropout does not immediately hide the alert.
+
 ## Tests
+
+Run the complete test suite:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-## Default adaptive rules
+The tests cover sustained head, eye, and body behavior; normal recovery; downward
+writing gaze; body-box jitter; repeated movement; stable tracking IDs; duplicate
+suppression; unique face assignment; and the SQLite incident lifecycle.
 
-| Signal | Default rule |
-|---|---|
-| Initial calibration | Learn each student's neutral head angle for 2 seconds |
-| Head direction | A left/right turn beyond 18 degrees held for 1 second creates an incident |
-| Side gaze | Relative iris shift beyond 0.35 held for 1 second creates an incident; strong downward writing gaze is ignored |
-| Body movement | A lateral shift beyond 0.15 body widths held for 1 second creates an incident |
-| Head + eyes | Matching head and eye direction receives a 1.35x evidence multiplier |
-| Recovery | Risk decreases by 1.25 points per second while behavior is normal |
-| Thresholds | Amber at risk 2.0; red and incident evidence at risk 5.0 |
-| Landmark gap | Preserve recent evidence for 0.6 seconds instead of resetting immediately |
-| Repeated head movement | 3 alternating left/right turns of at least 20 degrees within 4 seconds reaches alert risk |
-| Repeat incident | Same signal can alert again after 15 seconds |
-
-Tune these values from **Settings** before starting a source. Camera placement matters: faces should be visible, and students should be large enough in the frame for face landmarks to resolve.
-
-## Saved history
-
-Adaptive scoring uses the source video's timestamps, so risk does not change when
-processing FPS is slower than playback FPS. One continuous behavior
-episode creates at most one incident screenshot, and a confirmed student's box stays
-red for five seconds so a brief landmark dropout does not hide the alert.
-
-Incident details persist in `data/incidents.db`. Evidence screenshots persist in
-`screenshots/`. Use **Delete selected** to remove one database record, or **Clear
-history** to remove all database records. Both actions keep the screenshot files;
-use **Evidence folder** to open them. **Select all** selects every visible incident;
-multi-row selections also work with review, false-alarm, and delete actions.
-
-## Project structure
+## Project Structure
 
 ```text
-main.py                 Application entry point
-exam_guard/ui.py        PyQt6 desktop interface
-exam_guard/worker.py    Background video loop
-exam_guard/vision.py    YOLO detection, tracking, association, drawing
-exam_guard/head_pose.py MediaPipe landmark head pose
-exam_guard/behavior.py  Adaptive head/eye risk scoring and alert rules
-exam_guard/database.py  SQLite incidents and screenshot recording
-tests/                  Behavior and database tests
+main.py                  Application entry point and command-line source options
+exam_guard/config.py     Detection thresholds and validation
+exam_guard/domain.py     Shared observations, results, boxes, and incidents
+exam_guard/worker.py     Background capture and analysis thread
+exam_guard/vision.py     YOLO tracking, face association, and frame overlays
+exam_guard/head_pose.py  MediaPipe head-pose and iris-gaze estimation
+exam_guard/behavior.py   Head, eye, body, movement, and risk rules
+exam_guard/database.py   SQLite incident history and evidence recording
+exam_guard/ui.py         PyQt6 desktop interface and reviewer actions
+exam_guard/theme.py      Dark desktop visual system
+tests/                   Behavior, tracking, and database tests
 ```
+
+## Responsible Use
+
+Camera position, lighting, face size, occlusion, seating layout, and detector
+quality can all affect results. Validate thresholds with representative local exam
+footage before deployment, protect stored evidence, limit access to authorized
+reviewers, and require a person to evaluate every flag in context.
